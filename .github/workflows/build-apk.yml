@@ -1,10 +1,13 @@
-name: Build APK
+name: Build ETERNAL LOVE APK
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -14,36 +17,265 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Find ZIP
+        id: findzip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" | head -1)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No ZIP file found."
+            exit 1
+          fi
+
+          echo "ZIP found: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Extract project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -o "${{ steps.findzip.outputs.zip }}" -d extracted
+
+          echo "Extracted files:"
+          find extracted -maxdepth 4 -type f | head -100
+
+      - name: Find HTML
+        id: findhtml
+        shell: bash
+        run: |
+          set -e
+
+          HTML=$(find extracted -type f \
+            \( -iname "*.html" -o -iname "*.htm" \) \
+            | head -1)
+
+          if [ -z "$HTML" ]; then
+            echo "ERROR: No HTML file found inside ZIP."
+            exit 1
+          fi
+
+          echo "HTML found: $HTML"
+
+          REL="${HTML#extracted/}"
+
+          echo "html=$REL" >> "$GITHUB_OUTPUT"
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p android/app/src/main/java/com/eternallove/app
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/assets
+
+          # Copy EVERYTHING from the ZIP
+          cp -R extracted/. android/app/src/main/assets/
+
+          cat > android/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "ETERNAL-LOVE"
+          include(":app")
+          EOF
+
+          cat > android/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.6.1' apply false
+          }
+          EOF
+
+          cat > android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=false
+          EOF
+
+          cat > android/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.eternallove.app'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.eternallove.app'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+          }
+          EOF
+
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:allowBackup="true"
+                  android:usesCleartextTraffic="true"
+                  android:label="ETERNAL LOVE"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+
+              </application>
+
+          </manifest>
+          EOF
+
+          mkdir -p android/app/src/main/res/values
+
+          cat > android/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:colorAccent">#ff4f9a</item>
+              </style>
+
+          </resources>
+          EOF
+
+          HTML="${{ steps.findhtml.outputs.html }}"
+
+          cat > android/app/src/main/java/com/eternallove/app/MainActivity.java <<EOF
+          package com.eternallove.app;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.WebChromeClient;
+
+          public class MainActivity extends Activity {
+
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  WebSettings settings = webView.getSettings();
+
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+
+                  settings.setAllowFileAccess(true);
+                  settings.setAllowContentAccess(true);
+                  settings.setAllowFileAccessFromFileURLs(true);
+                  settings.setAllowUniversalAccessFromFileURLs(true);
+
+                  settings.setLoadsImagesAutomatically(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient());
+
+                  webView.loadUrl("file:///android_asset/${HTML}");
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Extract project
-        run: |
-          mkdir project
-          unzip -q eternal-love.zip -d project
-
-      - name: Find Gradle project
-        run: |
-          GRADLEW=$(find project -name gradlew -type f | head -1)
-          if [ -z "$GRADLEW" ]; then
-            echo "gradlew not found"
-            exit 1
-          fi
-          echo "GRADLEW=$GRADLEW" >> $GITHUB_ENV
-          echo "PROJECT_DIR=$(dirname "$GRADLEW")" >> $GITHUB_ENV
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
       - name: Build APK
+        working-directory: android
+        shell: bash
         run: |
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          set -e
+
+          echo "Starting Android build..."
+
+          gradle --version
+
+          gradle assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find android -type f -path "*/build/outputs/apk/debug/*.apk" | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find android -type f | tail -100
+            exit 1
+          fi
+
+          echo "APK successfully created:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: eternal-love-apk
-          path: |
-            **/build/outputs/apk/debug/*.apk
+          name: ETERNAL-LOVE-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
