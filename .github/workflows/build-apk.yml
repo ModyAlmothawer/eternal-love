@@ -1,414 +1,96 @@
-name: Build ETERNAL LOVE APK
+name: Build APK
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. تحميل المشروع
       - name: Checkout
         uses: actions/checkout@v4
 
-
-      # 2. البحث عن ملف ZIP
       - name: Find ZIP
-        id: findzip
         shell: bash
         run: |
-          set -e
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
 
-          ZIP=$(find . -type f -iname "*.zip" \
-            ! -path "./.git/*" \
-            | head -1 || true)
-
-          if [ -z "$ZIP" ]; then
+          if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found."
-            find . -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo "ZIP found: $ZIP"
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Found: $ZIP_FILE"
 
-
-      # 3. فك الضغط
       - name: Extract project
         shell: bash
         run: |
-          set -e
-
           rm -rf extracted
-          mkdir -p extracted
-
-          unzip -o "${{ steps.findzip.outputs.zip }}" -d extracted
+          mkdir extracted
+          unzip -q "$ZIP_FILE" -d extracted
 
           echo "Extracted files:"
-          find extracted -type f -print | head -200
+          find extracted -maxdepth 3 -type f | head -100
 
-
-      # 4. البحث عن HTML تلقائياً
-      - name: Find HTML
-        id: findhtml
+      - name: Find Android project
         shell: bash
         run: |
-          set -e
+          PROJECT_DIR=$(find extracted -type f -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs -r dirname)
 
-          HTML=""
-
-          echo "Searching for HTML files..."
-
-          # البحث الطبيعي عن html
-          HTML=$(find extracted -type f \
-            \( -iname "*.html" -o -iname "*.htm" \) \
-            | head -1 || true)
-
-          # لو مفيش امتداد HTML، نحاول اكتشافه من المحتوى
-          if [ -z "$HTML" ]; then
-            echo "Normal HTML file not found."
-            echo "Trying content detection..."
-
-            while IFS= read -r FILE; do
-
-              if grep -Iq . "$FILE" 2>/dev/null; then
-
-                if grep -qiE \
-                  '<!doctype[[:space:]]+html|<html[^>]*>|<head[^>]*>' \
-                  "$FILE" 2>/dev/null; then
-
-                  HTML="$FILE"
-                  break
-
-                fi
-
-              fi
-
-            done < <(find extracted -type f)
-          fi
-
-          if [ -z "$HTML" ]; then
-            echo ""
-            echo "======================================"
-            echo "ERROR: No HTML application found."
-            echo "======================================"
-            echo ""
-            echo "Files inside ZIP:"
-            find extracted -type f -print
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android Gradle project not found."
             exit 1
           fi
 
-          echo ""
-          echo "======================================"
-          echo "HTML FOUND:"
-          echo "$HTML"
-          echo "======================================"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $PROJECT_DIR"
 
-          REL="${HTML#extracted/}"
-
-          echo "html=$REL" >> "$GITHUB_OUTPUT"
-
-
-      # 5. تجهيز Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-
-      # 6. إنشاء Android Project
-      - name: Create Android project
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf android-project
-
-          mkdir -p android-project
-          mkdir -p android-project/app/src/main/java/com/eternallove/app
-          mkdir -p android-project/app/src/main/res/values
-          mkdir -p android-project/app/src/main/assets
-
-          cat > android-project/settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          rootProject.name = "ETERNAL-LOVE"
-          include(":app")
-          EOF
-
-
-          cat > android-project/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.6.1' apply false
-          }
-          EOF
-
-
-          cat > android-project/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          EOF
-
-
-          mkdir -p android-project/app
-
-
-          cat > android-project/app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.eternallove.app'
-              compileSdk 35
-
-              defaultConfig {
-                  applicationId 'com.eternallove.app'
-                  minSdk 23
-                  targetSdk 35
-                  versionCode 1
-                  versionName '1.0'
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      shrinkResources false
-                  }
-
-                  debug {
-                      minifyEnabled false
-                  }
-              }
-          }
-
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.7.0'
-              implementation 'androidx.webkit:webkit:1.12.1'
-          }
-          EOF
-
-
-      # 7. إنشاء AndroidManifest
-      - name: Create Manifest
-        shell: bash
-        run: |
-          cat > android-project/app/src/main/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-
-              <application
-                  android:allowBackup="true"
-                  android:usesCleartextTraffic="true"
-                  android:label="ETERNAL LOVE"
-                  android:theme="@style/AppTheme"
-                  android:supportsRtl="true">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-
-                  </activity>
-
-              </application>
-
-          </manifest>
-          EOF
-
-
-      # 8. إنشاء Theme
-      - name: Create Theme
-        shell: bash
-        run: |
-          cat > android-project/app/src/main/res/values/styles.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-
-          <resources>
-
-              <style name="AppTheme"
-                  parent="android:style/Theme.Material.Light.NoActionBar">
-
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowActionModeOverlay">true</item>
-                  <item name="android:colorAccent">#7C4DFF</item>
-                  <item name="android:navigationBarColor">#000000</item>
-                  <item name="android:statusBarColor">#000000</item>
-                  <item name="android:windowLightStatusBar">false</item>
-
-              </style>
-
-          </resources>
-          EOF
-
-
-      # 9. نسخ ملفات الموقع إلى Assets
-      - name: Copy Web App
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf android-project/app/src/main/assets/*
-          cp -a extracted/. android-project/app/src/main/assets/
-
-          echo "Assets:"
-          find android-project/app/src/main/assets -type f -print | head -200
-
-
-      # 10. إنشاء MainActivity
-      - name: Create MainActivity
-        shell: bash
-        run: |
-          set -e
-
-          HTML="${{ steps.findhtml.outputs.html }}"
-
-          # تحويل المسار إلى صيغة Android
-          HTML="${HTML#./}"
-
-          echo "Main HTML: $HTML"
-
-          cat > android-project/app/src/main/java/com/eternallove/app/MainActivity.java <<EOF
-          package com.eternallove.app;
-
-          import android.annotation.SuppressLint;
-          import android.app.Activity;
-          import android.os.Bundle;
-          import android.graphics.Color;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.webkit.WebChromeClient;
-
-          public class MainActivity extends Activity {
-
-              private WebView webView;
-
-              @SuppressLint("SetJavaScriptEnabled")
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  webView = new WebView(this);
-
-                  webView.setBackgroundColor(Color.BLACK);
-
-                  WebSettings settings = webView.getSettings();
-
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setDatabaseEnabled(true);
-
-                  settings.setAllowFileAccess(true);
-                  settings.setAllowContentAccess(true);
-
-                  settings.setJavaScriptCanOpenWindowsAutomatically(true);
-                  settings.setSupportMultipleWindows(false);
-
-                  settings.setMediaPlaybackRequiresUserGesture(false);
-
-                  webView.setWebViewClient(new WebViewClient());
-                  webView.setWebChromeClient(new WebChromeClient());
-
-                  webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
-
-                  setContentView(webView);
-
-                  webView.loadUrl(
-                      "file:///android_asset/$HTML"
-                  );
-              }
-
-              @Override
-              public void onBackPressed() {
-
-                  if (webView != null && webView.canGoBack()) {
-                      webView.goBack();
-                  } else {
-                      super.onBackPressed();
-                  }
-              }
-          }
-          EOF
-
-
-      # 11. إنشاء Gradle Wrapper
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
 
-
-      # 12. Build APK
-      - name: Build APK
-        working-directory: android-project
-        shell: bash
+      - name: Install Gradle
         run: |
-          set -e
+          sudo apt-get update
+          sudo apt-get install -y gradle
 
+      - name: Create Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
           gradle wrapper --gradle-version 8.7
 
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
           chmod +x gradlew
-
           ./gradlew assembleDebug --stacktrace
 
-
-      # 13. التأكد أن APK موجود
-      - name: Verify APK
+      - name: Find APK
         shell: bash
         run: |
-          set -e
-
-          APK=$(find android-project/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            | head -1 || true)
+          APK=$(find "${PROJECT_DIR}" -type f -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo ""
-          echo "======================================"
-          echo "APK CREATED SUCCESSFULLY"
-          echo "$APK"
-          echo "======================================"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          echo "Found APK: $APK"
 
-
-      # 14. رفع APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ETERNAL-LOVE-APK
-          path: android-project/app/build/outputs/apk/**/*.apk
+          path: ${{ env.APK }}
           if-no-files-found: error
