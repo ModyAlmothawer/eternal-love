@@ -32,10 +32,7 @@ jobs:
         run: |
           set -e
 
-          echo "======================================"
-          echo "Repository files"
-          echo "======================================"
-
+          echo "Repository files:"
           find . -maxdepth 2 -type f -print | sort
 
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" -print -quit)
@@ -45,46 +42,34 @@ jobs:
             exit 1
           fi
 
-          echo "Found ZIP:"
-          echo "$ZIP_FILE"
+          echo "Found ZIP: $ZIP_FILE"
 
           rm -rf extracted-project
           mkdir -p extracted-project
 
           unzip -q "$ZIP_FILE" -d extracted-project
 
-          echo "======================================"
-          echo "ZIP extracted successfully"
-          echo "======================================"
-
-          find extracted-project -maxdepth 4 -type f -print | sort
+          echo "ZIP extracted successfully."
 
       - name: Locate Gradle project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
-
           SETTINGS_FILE=$(find extracted-project \
             -type f \
             \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
             -print -quit)
 
-          if [ -n "$SETTINGS_FILE" ]; then
-            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: No Gradle settings file found inside ZIP."
-            echo "Expected settings.gradle or settings.gradle.kts"
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: No Gradle project found inside ZIP."
             exit 1
           fi
 
-          echo "======================================"
-          echo "Gradle project found:"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Gradle project:"
           echo "$PROJECT_DIR"
-          echo "======================================"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
@@ -97,37 +82,25 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "Checking Android project..."
-
           if [ ! -d "app" ]; then
             echo "ERROR: app directory not found."
             exit 1
           fi
 
           if [ -f "settings.gradle.kts" ]; then
-            echo "Found settings.gradle.kts"
+            echo "settings.gradle.kts found."
           elif [ -f "settings.gradle" ]; then
-            echo "Found settings.gradle"
+            echo "settings.gradle found."
           else
             echo "ERROR: Gradle settings file not found."
             exit 1
           fi
 
-          if [ -f "build.gradle.kts" ]; then
-            echo "Found build.gradle.kts"
-          elif [ -f "build.gradle" ]; then
-            echo "Found build.gradle"
-          else
-            echo "WARNING: Root build.gradle file not found."
-          fi
-
           if [ -f "app/google-services.json" ]; then
-            echo "Found app/google-services.json"
+            echo "google-services.json found."
           else
-            echo "WARNING: app/google-services.json not found."
+            echo "WARNING: google-services.json not found."
           fi
-
-          echo "Android project verification completed."
 
       - name: Prepare Gradle
         shell: bash
@@ -137,12 +110,39 @@ jobs:
           cd "$PROJECT_DIR"
 
           if [ -f "./gradlew" ]; then
-            echo "Gradle wrapper found."
             chmod +x ./gradlew
+            echo "Gradle wrapper found."
           else
-            echo "Gradle wrapper not found."
-            echo "Using GitHub runner Gradle installation."
+            echo "Gradle wrapper not found. Using system Gradle."
           fi
+
+      - name: Create debug keystore
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "debug.keystore" ]; then
+            echo "debug.keystore already exists."
+          else
+            echo "Creating debug.keystore..."
+
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "debug.keystore created successfully."
+          fi
+
+          ls -lh debug.keystore
 
       - name: Build Debug APK
         shell: bash
@@ -152,7 +152,7 @@ jobs:
           cd "$PROJECT_DIR"
 
           echo "======================================"
-          echo "BUILDING APK"
+          echo "BUILDING DEBUG APK"
           echo "======================================"
 
           if [ -f "./gradlew" ]; then
@@ -166,9 +166,7 @@ jobs:
         run: |
           set -e
 
-          echo "======================================"
-          echo "Searching for generated APK"
-          echo "======================================"
+          echo "Searching for APK..."
 
           find "$PROJECT_DIR/app/build/outputs" \
             -type f \
