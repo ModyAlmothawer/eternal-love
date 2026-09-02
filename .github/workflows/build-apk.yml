@@ -19,11 +19,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -33,44 +32,102 @@ jobs:
         run: |
           set -e
 
-          echo "Files in repository:"
-          find . -maxdepth 2 -type f | sort
+          echo "======================================"
+          echo "Repository files"
+          echo "======================================"
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          find . -maxdepth 2 -type f -print | sort
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No project ZIP file found in repository root."
+            echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
-          echo "Found project ZIP: $ZIP_FILE"
+          echo "Found ZIP:"
+          echo "$ZIP_FILE"
 
+          rm -rf extracted-project
           mkdir -p extracted-project
 
           unzip -q "$ZIP_FILE" -d extracted-project
 
-          echo "Extracted files:"
-          find extracted-project -maxdepth 3 -type f | sort
+          echo "======================================"
+          echo "ZIP extracted successfully"
+          echo "======================================"
+
+          find extracted-project -maxdepth 4 -type f -print | sort
 
       - name: Locate Gradle project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=$(find extracted-project -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -print -quit | xargs -r dirname)
+          PROJECT_DIR=""
+
+          SETTINGS_FILE=$(find extracted-project \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -print -quit)
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find settings.gradle or settings.gradle.kts inside the ZIP."
+            echo "ERROR: No Gradle settings file found inside ZIP."
+            echo "Expected settings.gradle or settings.gradle.kts"
             exit 1
           fi
 
-          echo "Gradle project found at:"
+          echo "======================================"
+          echo "Gradle project found:"
           echo "$PROJECT_DIR"
-
-          echo "Gradle project contents:"
-          ls -la "$PROJECT_DIR"
+          echo "======================================"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          ls -la "$PROJECT_DIR"
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking Android project..."
+
+          if [ ! -d "app" ]; then
+            echo "ERROR: app directory not found."
+            exit 1
+          fi
+
+          if [ -f "settings.gradle.kts" ]; then
+            echo "Found settings.gradle.kts"
+          elif [ -f "settings.gradle" ]; then
+            echo "Found settings.gradle"
+          else
+            echo "ERROR: Gradle settings file not found."
+            exit 1
+          fi
+
+          if [ -f "build.gradle.kts" ]; then
+            echo "Found build.gradle.kts"
+          elif [ -f "build.gradle" ]; then
+            echo "Found build.gradle"
+          else
+            echo "WARNING: Root build.gradle file not found."
+          fi
+
+          if [ -f "app/google-services.json" ]; then
+            echo "Found app/google-services.json"
+          else
+            echo "WARNING: app/google-services.json not found."
+          fi
+
+          echo "Android project verification completed."
 
       - name: Prepare Gradle
         shell: bash
@@ -80,32 +137,12 @@ jobs:
           cd "$PROJECT_DIR"
 
           if [ -f "./gradlew" ]; then
+            echo "Gradle wrapper found."
             chmod +x ./gradlew
-            echo "Using project Gradle wrapper."
           else
-            echo "No gradlew found. Using installed Gradle."
+            echo "Gradle wrapper not found."
+            echo "Using GitHub runner Gradle installation."
           fi
-
-      - name: Verify Android project
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "Checking required Android files..."
-
-          test -f "settings.gradle.kts" || test -f "settings.gradle"
-          test -d "app"
-
-          if [ -f "app/google-services.json" ]; then
-            echo "google-services.json found."
-          else
-            echo "WARNING: app/google-services.json was not found."
-          fi
-
-          echo "Application files:"
-          ls -la app
 
       - name: Build Debug APK
         shell: bash
@@ -114,22 +151,34 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo "======================================"
+          echo "BUILDING APK"
+          echo "======================================"
+
           if [ -f "./gradlew" ]; then
             ./gradlew clean :app:assembleDebug --stacktrace
           else
             gradle clean :app:assembleDebug --stacktrace
           fi
 
-      - name: Find APK
+      - name: Find generated APK
         shell: bash
         run: |
           set -e
 
-          echo "Searching for APK..."
+          echo "======================================"
+          echo "Searching for generated APK"
+          echo "======================================"
 
-          find "$PROJECT_DIR/app/build/outputs" -type f -name "*.apk" -print
+          find "$PROJECT_DIR/app/build/outputs" \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          APK=$(find "$PROJECT_DIR/app/build/outputs" -type f -name "app-debug.apk" -print -quit)
+          APK=$(find "$PROJECT_DIR/app/build/outputs" \
+            -type f \
+            -name "app-debug.apk" \
+            -print -quit)
 
           if [ -z "$APK" ]; then
             echo "ERROR: app-debug.apk was not generated."
