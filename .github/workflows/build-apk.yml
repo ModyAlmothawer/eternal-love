@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -23,23 +23,127 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Check project files
+      - name: Find and extract project ZIP
+        shell: bash
         run: |
-          echo "Project root:"
-          ls -la
-          echo "App directory:"
-          ls -la app || true
+          set -e
+
+          echo "Files in repository:"
+          find . -maxdepth 2 -type f | sort
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No project ZIP file found in repository root."
+            exit 1
+          fi
+
+          echo "Found project ZIP: $ZIP_FILE"
+
+          mkdir -p extracted-project
+
+          unzip -q "$ZIP_FILE" -d extracted-project
+
+          echo "Extracted files:"
+          find extracted-project -maxdepth 3 -type f | sort
+
+      - name: Locate Gradle project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR=$(find extracted-project -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -print -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Could not find settings.gradle or settings.gradle.kts inside the ZIP."
+            exit 1
+          fi
+
+          echo "Gradle project found at:"
+          echo "$PROJECT_DIR"
+
+          echo "Gradle project contents:"
+          ls -la "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Gradle
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "Using project Gradle wrapper."
+          else
+            echo "No gradlew found. Using installed Gradle."
+          fi
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking required Android files..."
+
+          test -f "settings.gradle.kts" || test -f "settings.gradle"
+          test -d "app"
+
+          if [ -f "app/google-services.json" ]; then
+            echo "google-services.json found."
+          else
+            echo "WARNING: app/google-services.json was not found."
+          fi
+
+          echo "Application files:"
+          ls -la app
 
       - name: Build Debug APK
-        run: gradle clean :app:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            ./gradlew clean :app:assembleDebug --stacktrace
+          else
+            gradle clean :app:assembleDebug --stacktrace
+          fi
+
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching for APK..."
+
+          find "$PROJECT_DIR/app/build/outputs" -type f -name "*.apk" -print
+
+          APK=$(find "$PROJECT_DIR/app/build/outputs" -type f -name "app-debug.apk" -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: app-debug.apk was not generated."
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Lyubov-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
